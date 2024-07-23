@@ -89,7 +89,7 @@
                         </descriptorRefs>
 			<!--archive>
           			<manifest>
-            				<mainClass>com.carrotdata.membench.Benchmarks</mainClass>
+            				<mainClass>com.carrotdata.membench.Main</mainClass>
           			</manifest>
         		</archive-->
                	</configuration>
