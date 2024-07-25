@@ -19,6 +19,7 @@
 package com.carrotdata.membench;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -280,13 +281,11 @@ public class Main {
         return;
       } finally {
         try {
-          if (client != null) {
-            client.shutdown();
-          }
+          client.shutdown();
         } catch (IOException e) {
           // TODO Auto-generated catch block
           e.printStackTrace();
-        }
+        } 
       }
     };
 
@@ -306,13 +305,72 @@ public class Main {
         e.printStackTrace();
       }
     }
-
+    
     long end = System.currentTimeMillis();
-    logger.info("Done benchmark[{}] loaded {} records avg size={} in {} ms. RPS={}, compresssion={}",
+    logger.info("Done benchmark[{}] loaded {} records avg size={} in {} ms RPS={}, compresssion={}, Server RSS (est.)={}",
       bench.getName(), numRecords, bench.getAvgRecordSize(), (end - start),
-      numRecords * 1000 / (end - start), compressed.get() == 0? "n/a": (double) total.get() / compressed.get());
+      numRecords * 1000 / (end - start), compressed.get() == 0? "n/a": (double) total.get() / compressed.get(), format(memoryUsed()));
   }
 
+  private static double memoryUsed() throws IOException {
+    XMemcachedClient client = null;
+    try {
+      client = new XMemcachedClient(host, port);
+      if (client != null) {
+        Map<InetSocketAddress, Map<String, String>> res;
+        try {
+          res = client.getStats();
+          Map<String, String> map = res.values().iterator().next();
+          for (Map.Entry<String, String> entry : map.entrySet()) {
+            String name = entry.getKey();
+            if (name.endsWith("allocated_memory")) {
+              // Memcarrot has RAM overhead of~ 180Mb (Java VM)
+              return Long.parseLong(entry.getValue()) + 180_000_000;
+            }
+          }
+          // Memcached
+          res = client.getStatsByItem("slabs");
+          map = res.values().iterator().next();
+          for (Map.Entry<String, String> entry : map.entrySet()) {
+            String name = entry.getKey();
+            if (name.equals("total_malloced")) {
+              return 1.05 * Long.parseLong(entry.getValue());
+            }
+          }
+        } catch (MemcachedException | InterruptedException | TimeoutException e) {
+          // TODO Auto-generated catch block
+          e.printStackTrace();
+        }
+      }
+    } finally {
+      if (client != null) {
+        client.shutdown();
+      }
+    }
+    return -1;
+  }
+  
+  private static String format (double n) {
+    long GB = 1024L * 1024 * 1024;
+    long MB = 1024 * 1024;
+    String scale = null;
+    double v = 0;
+    if (n >= GB) {
+      v = (double) n / GB;
+      scale = "GB";
+    } else {
+      v = (double) n / MB;
+      scale = "MB";
+    }
+    String s = Double.toString(v);
+    int index = s.indexOf(".");
+    if (index >= 0) {
+      int up = Math.min(index + 3, s.length());
+      return s.substring(0, up) + scale;
+    }
+    return s + scale;
+  }
+  
   private static void parseArgs(String[] args) {
     for (int i = 0; i < args.length; i++) {
       String arg = args[i];
