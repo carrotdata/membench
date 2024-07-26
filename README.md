@@ -12,7 +12,7 @@ By combining memory usage metrics with performance measurements, membench provid
 
 ## About data sets
 
-We compiled 9 different data sets, covering different types of a structured, semi-structured and unstructured text objects. Available datasets:
+We have compiled 9 different data sets, covering different types of a structured, semi-structured and unstructured text objects. Available datasets are:
 
 - **Amazon Product Reviews**. Random samples of book reviews in JSON format. Format: CSV. Average object size - 528 bytes. Example:
 ```
