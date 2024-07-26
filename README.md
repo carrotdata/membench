@@ -3,7 +3,7 @@
 ### Introduction
 Membench is a pioneering benchmark tool designed to evaluate the memory usage and performance of Memcached-compatible servers. This client application offers a unique insight into how caching servers handle a wide range of data sets, making it an essential tool for developers and system administrators. Key features include:
 
-- **Wide Diversity of Data Sets**: Tests with 10 different data sets, ranging from small tweet messages (76 bytes) to large JSON objects (3.5 KB), providing a comprehensive assessment of server performance across various scenarios.
+- **Wide Diversity of Data Sets**: Tests with 9 different data sets, ranging from small tweet messages (76 bytes) to large JSON objects (over 3KB), providing a comprehensive assessment of server performance across various scenarios.
 - **Memory Usage Measurement**: The first tool to measure the memory consumption of caching servers, ensuring that memory efficiency is as closely monitored as pure performance.
 - **Performance Metrics**: In-depth analysis of server response times and throughput, giving a holistic view of the server’s capabilities.
 - **Real-World Relevance**: Data sets reflect real-world usage patterns, making the results highly applicable to actual deployment environments.
