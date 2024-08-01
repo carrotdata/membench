@@ -25,6 +25,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -60,6 +61,7 @@ public class Main {
   static int port = 11211;
   static long numRecords = 10_000_000;
   static Mode mode = Mode.SET;
+  static int batchSize = 50;
   
   static String[] data;
   
@@ -89,27 +91,30 @@ public class Main {
   private static void runDataGet() throws IOException {
 
     logger.info("Running benchmark (READ): ", bench.getName());
+    long toRead = 1000000;
+
     if (mode == Mode.GET) {
       int toLoad = 1_000_000;
       logger.info("Preparing {} records", toLoad);
       data = bench.getDataRecords(toLoad);
       logger.info("Prepared {} records", data.length);
     }
-    logger.info("Reading {} records in {} threads to server {}:{}", numRecords , numThreads, host, port);
+    logger.info("Reading {} random records in {} threads to server {}:{} batch size={}", numRecords , numThreads, host, port, batchSize);
     
     currentId.set(0);
-    
     Runnable reader = () -> {
 
-      int batchSize = 50;
       long start = 0;
       long total = 0;
+      long expected = 0;
       XMemcachedClient client = null;
+      Random r = new Random();
       try {
         client = new XMemcachedClient(host, port);
         
         while (true) {
-          start = currentId.getAndAdd(batchSize);
+          start = r.nextLong();
+          start = Math.abs(start) % (numRecords - batchSize);//currentId.getAndAdd(batchSize);
           if (start >= numRecords) {
             break;
           }
@@ -121,12 +126,11 @@ public class Main {
             
             Map<String, Object> result = client.get(keys); 
             
+            expected += n;
             for (Map.Entry<String, Object> entry: result.entrySet()){
               total++;
               totalRead.incrementAndGet();
-              if (total % 100000 == 0) {
-                logger.info("{} read {} records", Thread.currentThread().getName(), total);
-              }
+  
               String key = entry.getKey();
               Object value = entry.getValue();
               byte[] bvalue = (byte[]) value;
@@ -141,6 +145,13 @@ public class Main {
                 logger.error("{} read failed on key={}", Thread.currentThread(), key);
                 System.exit(-1);
               } 
+            }
+            if (expected % 100000 == 0) {
+              logger.info("{} read {} records, failed={}, collisions={}%", Thread.currentThread().getName(), expected, expected - total, (double)(expected-total) * 100/expected);
+            }
+            
+            if (expected >= toRead) {
+              break;
             }
           } catch (TimeoutException | MemcachedException e) {
             logger.error("Error", e);
@@ -184,7 +195,7 @@ public class Main {
     long end = System.currentTimeMillis();
     logger.info("Done benchmark[{}] read {} records off {} avg size={} in {} ms. RPS={}",
       bench.getName(), totalRead.get(), numRecords, bench.getAvgRecordSize(), (end - start),
-      numRecords * 1000 / (end - start));
+      toRead * numThreads * 1000 / (end - start));
   }
   
   private static Collection<String> getKeys(long start, int n) {
@@ -212,11 +223,10 @@ public class Main {
     logger.info("Preparing {} records", toLoad);
     data = bench.getDataRecords(toLoad);
     logger.info("Prepared {} records", data.length);
-    logger.info("Loading {} records in {} threads to server {}:{}", numRecords , numThreads, host, port);
+    logger.info("Loading {} records in {} threads to server {}:{} batch size={}", numRecords , numThreads, host, port, batchSize);
 
     Runnable loader = () -> {
 
-      int batchSize = 50;
       long start = 0;
       String key = "KEY:";
 
@@ -324,8 +334,8 @@ public class Main {
           for (Map.Entry<String, String> entry : map.entrySet()) {
             String name = entry.getKey();
             if (name.endsWith("allocated_memory")) {
-              // Memcarrot has RAM overhead of~ 180Mb (Java VM)
-              return Long.parseLong(entry.getValue()) + 180_000_000;
+              // Memcarrot has RAM overhead of~ 190Mb (Java VM)
+              return Long.parseLong(entry.getValue()) + 190_000_000;
             }
           }
           // Memcached
@@ -406,11 +416,24 @@ public class Main {
         case "-m":
           setMode(args[i]);
           break;
+        case "-a":
+          setBatchSize(args[i]);
+          break;
         default: usage();  
       }
     }
   }
   
+  private static void setBatchSize(String string) {
+    
+    try {
+      batchSize = Integer.parseInt(string);
+      if (batchSize <= 0 || batchSize > 1000) throw new NumberFormatException();
+    } catch (NumberFormatException e) {
+      logger.error("Wrong value for batch size: {}, expected integer number between 1 and 1000 (batchSize", string);
+    }
+  }
+
   private static void setMode(String s) {
     switch (s) {
       case "load" : mode = Mode.SET;
@@ -478,6 +501,7 @@ public class Main {
 
   private static void usage() {
     System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip] -m [load | load_read | read");
+    System.out.println("     -a   batch size for set/get operations. Default: 50");
     System.out.println("     -b   benchmark name. Available benchmarks: amazon_product_review, airbnb, arxiv, dblp, github, ohio, reddit, spotify, twitter, ");
     System.out.println("          twitter_sentiments. ");
     System.out.println("     -n   number of records to load to the cache. Default: 10000000");
