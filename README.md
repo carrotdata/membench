@@ -74,15 +74,15 @@ We have compiled 10 different data sets, covering different types of a structure
 ## Examples
 
 - Run `twitter` benchmark, load 10M records, use 4 threads, server address XXX, port - 1234, mode - load
-  ```
+  ```shell
   bin/membench.sh -b twitter -n 10000000 -t 4 -s XXX -p 1234 -m load
   ```
 - Run `airbnb` benchmark, load 20M records, use 16 threads, mode load and read
-  ```
+  ```shell
   bin/membench.sh -b airbnb -n 20000000 -t 16 -m load_read
   ```
 Membench supports client side compression (use ```-c gzip```). Do not enable it for ```Memcarrot``` server, because the server does it internally and much more efficiently. 
-You can enable client-side compression for vanilla ```memcached``` server. All tests have been performed with compression enabled for ```memcached```. Gzip codec with default compression level was used.
+You can enable client-side compression for vanilla ```memcached``` server. All tests have been performed with compression enabled for ```memcached``` (Gzip codec with default compression level was used). Default write/read batch size - 50 (```-a 50```) was used in all tests.
 
 ## Memcarrot 0.11 vs memcached 1.6.29
 ### Configuration
@@ -92,7 +92,7 @@ You can enable client-side compression for vanilla ```memcached``` server. All t
 - Number of threads: 4
 - Number of records varied from 10M to 100M across all data sets
 - ```memcached``` command line: ```memcached -m 30000 -v```
-- ```Memcarrot``` configuration: compression=ZSTD, level=3, compression page size=8192, stoarge max size=34359738368, index format=```com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat```  
+- ```Memcarrot``` configuration: compression=ZSTD, level=3, compression page size=8192, storage max size=34359738368, index format=```com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat```  
 > For ```twitter_sentiments``` and ```ohio``` datasets client compression has been disabled because compression ratio was below 1.0
  
 ### Results
