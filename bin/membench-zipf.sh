@@ -16,7 +16,7 @@ CPATH="${APP_DIR}/conf:${APP_DIR}/target/${MEMBENCH_RELEASE}"
 
 export JVM_OPTS="-Xmx${MAX_HEAP_SIZE} -cp ${CPATH}"
 
-exec_cmd="${JAVA_HOME}/bin/java ${JVM_OPTS} com.carrotdata.membench.Membench"
+exec_cmd="${JAVA_HOME}/bin/java ${JVM_OPTS} com.carrotdata.membench.MembenchZipf"
 
 # Pass all command line arguments to the Java application
 ${exec_cmd} "$@"

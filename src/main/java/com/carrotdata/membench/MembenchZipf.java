@@ -20,15 +20,12 @@ package com.carrotdata.membench;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.commons.math3.distribution.ZipfDistribution;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -43,26 +40,22 @@ import com.carrotdata.membench.benchmarks.RedditBenchmark;
 import com.carrotdata.membench.benchmarks.SpotifyBenchmark;
 import com.carrotdata.membench.benchmarks.TwitterBenchmark;
 import com.carrotdata.membench.benchmarks.TwitterSentimentsBenchmark;
+import com.carrotdata.membench.util.Percentile;
 
 import net.rubyeye.xmemcached.XMemcachedClient;
 import net.rubyeye.xmemcached.exception.MemcachedException;
 
-public class Main {
+public class MembenchZipf {
   
-  private static enum Mode {
-    SET, SET_GET, GET
-  }
   
-  private static Logger logger = LogManager.getLogger(Main.class);
+  private static Logger logger = LogManager.getLogger(MembenchZipf.class);
 
   static Benchmark bench;
   static int numThreads = 1;
   static String host = "localhost";
   static int port = 11211;
   static long numRecords = 10_000_000;
-  static Mode mode = Mode.SET;
-  static int batchSize = 50;
-  
+  static double zipfAlpha = 0.9;
   static String[] data;
   
   static boolean compressValue;
@@ -75,198 +68,36 @@ public class Main {
   
   public final static void main(String[] args) throws IOException {
     parseArgs(args);
-    
     if (bench == null) {
       usage();
     }
-    
-    if (mode != Mode.GET) {
-      runDataLoad();
-    }
-    if (mode != Mode.SET) {
-      runDataGet();
-    }
+    runBenchmark();
   }
   
-  private static void runDataGet() throws IOException {
-
-    logger.info("Running benchmark (READ): ", bench.getName());
-    long toRead = 1000000;
-
-    if (mode == Mode.GET) {
-      int toLoad = 1_000_000;
-      logger.info("Preparing {} records", toLoad);
-      data = bench.getDataRecords(toLoad);
-      logger.info("Prepared {} records", data.length);
-    }
-    logger.info("Reading {} random records in {} threads to server {}:{} batch size={}", numRecords , numThreads, host, port, batchSize);
-    
-    currentId.set(0);
-    Runnable reader = () -> {
-
-      long start = 0;
-      long total = 0;
-      long expected = 0;
-      XMemcachedClient client = null;
-      Random r = new Random();
-      try {
-        client = new XMemcachedClient(host, port);
-        
-        while (true) {
-          start = r.nextLong();
-          start = Math.abs(start) % (numRecords - batchSize);//currentId.getAndAdd(batchSize);
-          if (start >= numRecords) {
-            break;
-          }
-          int n = (int) Math.min(batchSize, numRecords - start);
-
-          Collection<String> keys = getKeys(start, n);
-
-          try {
-            
-            Map<String, Object> result = client.get(keys); 
-            
-            expected += n;
-            for (Map.Entry<String, Object> entry: result.entrySet()){
-              total++;
-              totalRead.incrementAndGet();
-  
-              String key = entry.getKey();
-              Object value = entry.getValue();
-              byte[] bvalue = (byte[]) value;
-              String expValue = getValue(key);
-              if (value == null) {
-                continue;
-              }
-              if (compressValue) {
-                bvalue = GzipCompressor.decompress(bvalue);
-              }
-              if (Arrays.compare(expValue.getBytes(), bvalue) != 0) {
-                logger.error("{} read failed on key={}", Thread.currentThread(), key);
-                System.exit(-1);
-              } 
-            }
-            if (expected % 100000 == 0) {
-              logger.info("{} read {} records, failed={}, collisions={}%", Thread.currentThread().getName(), expected, expected - total, (double)(expected-total) * 100/expected);
-            }
-            
-            if (expected >= toRead) {
-              break;
-            }
-          } catch (TimeoutException | MemcachedException e) {
-            logger.error("Error", e);
-            return;
-          } catch (InterruptedException e) {
-            logger.error("Error", e);
-          }
-        }
-      } catch (IOException e) {
-        logger.error("Error", e);
-        return;
-      } finally {
-        try {
-          if (client != null) {
-            client.shutdown();
-          }
-        } catch (IOException e) {
-          // TODO Auto-generated catch block
-          e.printStackTrace();
-        }
-      }
-    };
-
-    long start = System.currentTimeMillis();
-    Thread[] pool = new Thread[numThreads];
-
-    for (int i = 0; i < numThreads; i++) {
-      pool[i] = new Thread(reader);
-      pool[i].start();
-    }
-
-    for (int i = 0; i < numThreads; i++) {
-      try {
-        pool[i].join();
-      } catch (InterruptedException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
-    }
-
-    long end = System.currentTimeMillis();
-    logger.info("Done benchmark[{}] read {} records off {} avg size={} in {} ms. RPS={}",
-      bench.getName(), totalRead.get(), numRecords, bench.getAvgRecordSize(), (end - start),
-      toRead * numThreads * 1000 / (end - start));
-  }
-  
-  private static Collection<String> getKeys(long start, int n) {
-    List<String> result = new ArrayList<String>();
-    for (int i = 0; i < n; i++) {
-      result.add("KEY:" + (start + i));
-    }
-    return result;
-  }
-  
-  private static long getId(String key) {
-    return Long.parseLong(key.substring(4));
-  }
-  
-  private static String getValue(String key) {
-    
-    long id = getId(key);
-    return data[(int)(id % data.length)];
-  }
-  
-  private static void runDataLoad() throws IOException {
+  private static void runBenchmark() throws IOException {
     int toLoad = 1_000_000;
 
-    logger.info("Running benchmark (LOAD): ", bench.getName());
+    logger.info("Running benchmark (LOAD DATA): ", bench.getName());
     logger.info("Preparing {} records", toLoad);
     data = bench.getDataRecords(toLoad);
     logger.info("Prepared {} records", data.length);
-    logger.info("Loading {} records in {} threads to server {}:{} batch size={}", numRecords , numThreads, host, port, batchSize);
+    logger.info("Reading {} records in {} threads from server {}:{}", numRecords, numThreads, host,
+      port);
+    
+    final XMemcachedClient client = new XMemcachedClient(host, port);
 
-    Runnable loader = () -> {
+    Runnable r = () -> {
 
-      long start = 0;
       String key = "KEY:";
 
-      XMemcachedClient client = null;
+      Percentile add_perc = new Percentile(10000, (int) numRecords);
+      Percentile get_perc = new Percentile(10000, (int) numRecords);
       try {
-        client = new XMemcachedClient(host, port);
-
         long loaded = 0;
-        
-        
-        while (true) {
-          start = currentId.getAndAdd(batchSize);
-          if (start >= numRecords) {
-            break;
-          }
-          int n = (int) Math.min(batchSize, numRecords - start);
-
-          for (int i = 0; i < n - 1; i++) {
-            int index = (int) ((start + i) % data.length);
-            try {
-              byte[] value = data[index].getBytes();
-              total.addAndGet(value.length);
-              if (compressValue) {
-                value = GzipCompressor.compress(value);
-                compressed.addAndGet(value.length);
-              }
-              client.setWithNoReply(key + (start + i), 10000, value);
-              loaded++;
-              if (loaded % 100000 == 0) {
-                logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
-              }
-            } catch (InterruptedException e) {
-              logger.error("Error", e);
-            } catch (MemcachedException e) {
-              logger.error("Error", e);
-              return;
-            }
-          }
-          int index = (int) ((start + n - 1) % data.length);
-
+        ZipfDistribution dist = new ZipfDistribution((int) numRecords, zipfAlpha);
+        long hits = 0;
+        for (int i = 0; i < 10 * numRecords; i++) {
+          int index = (int) (dist.sample() % data.length);
           try {
             byte[] value = data[index].getBytes();
             total.addAndGet(value.length);
@@ -274,36 +105,55 @@ public class Main {
               value = GzipCompressor.compress(value);
               compressed.addAndGet(value.length);
             }
-            client.set(key + (start + n - 1), 10000, value);
+            String skey = key + index;
+            long t1 = System.nanoTime();
+            byte[] v = client.get(skey);
+            if (v == null) {
+              t1 = System.nanoTime();
+              client.add(skey, 10000, value);
+              add_perc.add(System.nanoTime() - t1);
+            } else if (Arrays.equals(value, v)){
+              hits++;
+              get_perc.add(System.nanoTime() - t1);
+            } else {
+              logger.error("Wrong value for key{}", skey);
+              return;
+            }
             loaded++;
             if (loaded % 100000 == 0) {
-              logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+              logger.info("{} queried {} records, hit ratio={}", Thread.currentThread().getName(),
+                loaded, (double) hits / i);
             }
-          } catch (TimeoutException | MemcachedException e) {
-            logger.error("Error", e);
-            return;
           } catch (InterruptedException e) {
             logger.error("Error", e);
+          } catch (MemcachedException e) {
+            logger.error("Error", e);
+            return;
+          } catch (TimeoutException e) {
+            logger.error("Error", e);
+            return;
           }
         }
+
       } catch (IOException e) {
         logger.error("Error", e);
         return;
       } finally {
-        try {
-          client.shutdown();
-        } catch (IOException e) {
-          // TODO Auto-generated catch block
-          e.printStackTrace();
-        } 
+        
       }
+      logger.info(" ADD, min={} max={}, p50={}, p90={} p99={} p99.9={} p99.99={}", add_perc.min(),
+        add_perc.max(), add_perc.value(0.5), add_perc.value(0.9), add_perc.value(0.99),
+        add_perc.value(0.999), add_perc.value(0.9999));
+      logger.info(" GET, min={} max={}, p50={}, p90={} p99={} p99.9={} p99.99={}", get_perc.min(),
+        get_perc.max(), get_perc.value(0.5), get_perc.value(0.9), get_perc.value(0.99),
+        get_perc.value(0.999), get_perc.value(0.9999));
     };
 
     long start = System.currentTimeMillis();
     Thread[] pool = new Thread[numThreads];
 
     for (int i = 0; i < numThreads; i++) {
-      pool[i] = new Thread(loader);
+      pool[i] = new Thread(r);
       pool[i].start();
     }
 
@@ -315,11 +165,20 @@ public class Main {
         e.printStackTrace();
       }
     }
-    
+
     long end = System.currentTimeMillis();
-    logger.info("Done benchmark[{}] loaded {} records avg size={} in {} ms RPS={}, compresssion={}, Server RSS (est.)={}",
+    try {
+      client.shutdown();
+    } catch (IOException e) {
+      // TODO Auto-generated catch block
+      e.printStackTrace();
+    }
+    logger.info(
+      "Done benchmark[{}] loaded {} records avg size={} in {} ms RPS={}, compresssion={}, Server RSS (est.)={}",
       bench.getName(), numRecords, bench.getAvgRecordSize(), (end - start),
-      numRecords * 1000 / (end - start), compressed.get() == 0? "n/a": (double) total.get() / compressed.get(), format(memoryUsed()));
+      10 * numThreads * numRecords * 1000 / (end - start),
+      compressed.get() == 0 ? "n/a" : (double) total.get() / compressed.get(),
+      format(memoryUsed()));
   }
 
   private static double memoryUsed() throws IOException {
@@ -410,42 +269,20 @@ public class Main {
           port = Integer.parseInt(args[i]);
           break;
         }
-        case "-c": 
+        case "-c": {
           compressValue = true;
           break;
-        case "-m":
-          setMode(args[i]);
+        }
+        case "-z" : { 
+          zipfAlpha = Double.parseDouble(args[i]);
           break;
-        case "-a":
-          setBatchSize(args[i]);
-          break;
+        }
         default: usage();  
       }
     }
   }
   
-  private static void setBatchSize(String string) {
-    
-    try {
-      batchSize = Integer.parseInt(string);
-      if (batchSize <= 0 || batchSize > 1000) throw new NumberFormatException();
-    } catch (NumberFormatException e) {
-      logger.error("Wrong value for batch size: {}, expected integer number between 1 and 1000 (batchSize", string);
-    }
-  }
 
-  private static void setMode(String s) {
-    switch (s) {
-      case "load" : mode = Mode.SET;
-        break;
-      case "load_read": mode = Mode.SET_GET;
-        break;
-      case "read" : mode = Mode.GET;
-        break;
-      default:
-        throw new IllegalArgumentException("Unrecognized benchmark mode: " + s);
-    }
-  }
 
   private static void initBenchmark(String name) {
     
@@ -500,16 +337,15 @@ public class Main {
   }
 
   private static void usage() {
-    System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip] -m [load | load_read | read");
-    System.out.println("     -a   batch size for set/get operations. Default: 50");
+    System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip]");
     System.out.println("     -b   benchmark name. Available benchmarks: amazon_product_review, airbnb, arxiv, dblp, github, ohio, reddit, spotify, twitter, ");
     System.out.println("          twitter_sentiments. ");
-    System.out.println("     -n   number of records to load to the cache. Default: 10000000");
+    System.out.println("     -n   number of queries per thread. Default: 10,000,000");
     System.out.println("     -t   number of client threads. Default: 1");
     System.out.println("     -s   memcached server address. Default: localhost");
     System.out.println("     -p   memcached port number. Default: 11211");
+    System.out.println("     -z   zipfian alpha value. Default: 0.9");
     System.out.println("     -c   compression codec name for client-side compression. Do not use it with Memcarrot. Supported: gzip. Default: none");
-    System.out.println("     -m   mode of operation: load, load_read, read. Default: load");
     System.out.println("     -h   help.");
     System.exit(-1);
   }
