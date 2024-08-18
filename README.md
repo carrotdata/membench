@@ -74,15 +74,15 @@ We have compiled 10 different data sets, covering different types of a structure
 ## Examples
 
 - Run `twitter` benchmark, load 10M records, use 4 threads, server address XXX, port - 1234, mode - load
-  ```
+  ```shell
   bin/membench.sh -b twitter -n 10000000 -t 4 -s XXX -p 1234 -m load
   ```
 - Run `airbnb` benchmark, load 20M records, use 16 threads, mode load and read
-  ```
+  ```shell
   bin/membench.sh -b airbnb -n 20000000 -t 16 -m load_read
   ```
 Membench supports client side compression (use ```-c gzip```). Do not enable it for ```Memcarrot``` server, because the server does it internally and much more efficiently. 
-You can enable client-side compression for vanilla ```memcached``` server. All tests have been performed with compression enabled for ```memcached```. Gzip codec with default compression level was used.
+You can enable client-side compression for vanilla ```memcached``` server. All tests have been performed with compression enabled for ```memcached``` (Gzip codec with default compression level was used). Default write/read batch size - 50 (```-a 50```) was used in all tests.
 
 ## Memcarrot 0.11 vs memcached 1.6.29
 ### Configuration
@@ -92,7 +92,7 @@ You can enable client-side compression for vanilla ```memcached``` server. All t
 - Number of threads: 4
 - Number of records varied from 10M to 100M across all data sets
 - ```memcached``` command line: ```memcached -m 30000 -v```
-- ```Memcarrot``` configuration: compression=ZSTD, level=3, compression page size=8192, stoarge max size=34359738368, index format=```com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat```  
+- ```Memcarrot``` configuration: compression=ZSTD, level=3, compression page size=8192, storage max size=34359738368, index format=```com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat```  
 > For ```twitter_sentiments``` and ```ohio``` datasets client compression has been disabled because compression ratio was below 1.0
  
 ### Results
@@ -103,6 +103,13 @@ Table 1. RAM Usage and load throughput. Each result cell contains three numbers:
 | :---: | :---: | :---: | :---: | :---: | :--: | :---: | :---: | :---: | :---: | :---: |
 | Memcarrot 0.11 | 20M, 8.38GB, 356K | 40M, 8.9GB, 535K | 20M, 10.8GB, 302K | 50M, 6.2GB, 680K | 40M, 3.0GB, 734K | 100M, 4.16GB, 805K | 10M, 3.33GB, 368K | 40M, 4GB, 655K | 10M, 5.4GB, 293K | 50M, 5.11GB, 755K |
 | memcached 1.6.29 | 20M, 19.4GB, 518K | 40M, 18.23GB, 576K | 20M, 20.44GB, 521K | 50M, 18.7GB, 670K | 40M, 14.2GB, 582K | 100M, 18.9GB, 644K | 10M, 13.0GB, 419K | 40M, 22.0GB, 556K | 10M, 11.7GB, 426K | 50M, 16.4GB, 726K |
+
+
+Picture 1. Memory usage in GB.
+![Memory usage in GB](/assets/memory.png)
+
+Picture 2. Load throughput in Kops
+![Load throughput in Kops](/assets/perf.png)
 
 Contact: Vladimir Rodionov vlad@trycarrots.io. 
 Copyright (c) Carrot Data, Inc., 2024
