@@ -8,7 +8,7 @@ APP_DIR=$(dirname "$SCRIPT_DIR")
 
 echo "Membench home directory is ${APP_DIR}"
 
-MAX_HEAP_SIZE=6g
+MAX_HEAP_SIZE=10g
 MEMBENCH_RELEASE=membench-0.11-SNAPSHOT-jar-with-dependencies.jar
 cd "${APP_DIR}" || exit
 

@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -54,17 +55,23 @@ public class MembenchZipf {
   static int numThreads = 1;
   static String host = "localhost";
   static int port = 11211;
-  static long numRecords = 10_000_000;
+  static long baseRecords = 1_000_000;
+  static int recMultiplier = 10;
+  static long numRecords = baseRecords * recMultiplier;
   static double zipfAlpha = 0.9;
+  // Time to replace whole data set
+  static int dataReplaceTime = 3600; // 900 seconds
+  static int testRunTime = 1800; // 1800 seconds
   static String[] data;
   
   static boolean compressValue;
-    
-  static AtomicLong currentId = new AtomicLong();
   
-  static AtomicLong total = new AtomicLong();
+  static AtomicLong totalSize = new AtomicLong();
+  static AtomicLong totalRequests = new AtomicLong();
+
   static AtomicLong compressed = new AtomicLong();
-  static AtomicLong totalRead = new AtomicLong();
+
+  static int[] ttl = new int[] {150, 1000, 3000, 10000};
   
   public final static void main(String[] args) throws IOException {
     parseArgs(args);
@@ -74,13 +81,35 @@ public class MembenchZipf {
     runBenchmark();
   }
   
+  /**
+   * 
+   * @param timeElapsed
+   * @return
+   */
+  private static long getHead(long timeElapsed) {
+    long rt = 1000L * dataReplaceTime;
+    return (long) (numRecords * (1 + (double) timeElapsed / rt)); 
+  }
+  
+  private static long getIndex(long index) {
+    ThreadLocalRandom r = ThreadLocalRandom.current();
+    int n = r.nextInt(recMultiplier);
+    return index * recMultiplier + n;
+  }
+  
+  private static int getTtl() {
+    ThreadLocalRandom r = ThreadLocalRandom.current();
+    int index = r.nextInt(ttl.length);
+    return ttl[index];
+  }
+  
   private static void runBenchmark() throws IOException {
-    int toLoad = 1_000_000;
+    int toLoad = 10_000_000;
 
     logger.info("Running benchmark (LOAD DATA): ", bench.getName());
-    logger.info("Preparing {} records", toLoad);
+    logger.info("Preparing up to {} records", toLoad);
     data = bench.getDataRecords(toLoad);
-    logger.info("Prepared {} records", data.length);
+    logger.info("Prepared {} records, average size={} bytes", data.length, bench.getAvgRecordSize());
     logger.info("Reading {} records in {} threads from server {}:{}", numRecords, numThreads, host,
       port);
     
@@ -88,6 +117,8 @@ public class MembenchZipf {
 
     Runnable r = () -> {
 
+      long startTime = System.currentTimeMillis();
+      long runTime = 1000L * testRunTime; 
       String key = "KEY:";
 
       Percentile add_perc = new Percentile(10000, (int) numRecords);
@@ -96,11 +127,13 @@ public class MembenchZipf {
         long loaded = 0;
         ZipfDistribution dist = new ZipfDistribution((int) numRecords, zipfAlpha);
         long hits = 0;
-        for (int i = 0; i < 10 * numRecords; i++) {
-          int index = (int) (dist.sample() % data.length);
+        while (System.currentTimeMillis() - startTime < runTime) {
+          long head = getHead(System.currentTimeMillis() - startTime);
+          long index = (head - dist.sample()) ;
+          //index = (int) (getIndex(index) % data.length);
           try {
-            byte[] value = data[index].getBytes();
-            total.addAndGet(value.length);
+            byte[] value = data[(int) (index % data.length)].getBytes();
+            totalSize.addAndGet(value.length);
             if (compressValue) {
               value = GzipCompressor.compress(value);
               compressed.addAndGet(value.length);
@@ -110,7 +143,7 @@ public class MembenchZipf {
             byte[] v = client.get(skey);
             if (v == null) {
               t1 = System.nanoTime();
-              client.add(skey, 10000, value);
+              client.add(skey, getTtl(), value);
               add_perc.add(System.nanoTime() - t1);
             } else if (Arrays.equals(value, v)){
               hits++;
@@ -120,9 +153,11 @@ public class MembenchZipf {
               return;
             }
             loaded++;
+            totalRequests.incrementAndGet();
+            
             if (loaded % 100000 == 0) {
-              logger.info("{} queried {} records, hit ratio={}", Thread.currentThread().getName(),
-                loaded, (double) hits / i);
+              logger.info("{} queried {} records, hit ratio={}, head={}", Thread.currentThread().getName(),
+                loaded, (double) hits / loaded, head);
             }
           } catch (InterruptedException e) {
             logger.error("Error", e);
@@ -138,9 +173,7 @@ public class MembenchZipf {
       } catch (IOException e) {
         logger.error("Error", e);
         return;
-      } finally {
-        
-      }
+      } 
       logger.info(" ADD, min={} max={}, p50={}, p90={} p99={} p99.9={} p99.99={}", add_perc.min(),
         add_perc.max(), add_perc.value(0.5), add_perc.value(0.9), add_perc.value(0.99),
         add_perc.value(0.999), add_perc.value(0.9999));
@@ -174,10 +207,10 @@ public class MembenchZipf {
       e.printStackTrace();
     }
     logger.info(
-      "Done benchmark[{}] loaded {} records avg size={} in {} ms RPS={}, compresssion={}, Server RSS (est.)={}",
-      bench.getName(), numRecords, bench.getAvgRecordSize(), (end - start),
-      10 * numThreads * numRecords * 1000 / (end - start),
-      compressed.get() == 0 ? "n/a" : (double) total.get() / compressed.get(),
+      "Done benchmark[{}] queried {} records avg size={} in {} ms RPS={}, compression={}, Server RSS (est.)={}",
+      bench.getName(), totalRequests.get(), bench.getAvgRecordSize(), (end - start),
+      totalRequests.get() * 1000 / (end - start),
+      compressed.get() == 0 ? "n/a" : (double) totalSize.get() / compressed.get(),
       format(memoryUsed()));
   }
 
@@ -253,8 +286,9 @@ public class MembenchZipf {
           initBenchmark(args[i]);
           break;
         }
-        case "-n" : {
-          numRecords = Long.parseLong(args[i]);
+        case "-m" : {
+          recMultiplier = Integer.parseInt(args[i]);
+          numRecords = recMultiplier * baseRecords;
           break;
         }
         case "-t" : {
@@ -267,6 +301,14 @@ public class MembenchZipf {
         }
         case "-p" : { 
           port = Integer.parseInt(args[i]);
+          break;
+        }
+        case "-r" : { 
+          dataReplaceTime = Integer.parseInt(args[i]);
+          break;
+        }
+        case "-e" : { 
+          testRunTime = Integer.parseInt(args[i]);
           break;
         }
         case "-c": {
@@ -340,8 +382,10 @@ public class MembenchZipf {
     System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip]");
     System.out.println("     -b   benchmark name. Available benchmarks: amazon_product_review, airbnb, arxiv, dblp, github, ohio, reddit, spotify, twitter, ");
     System.out.println("          twitter_sentiments. ");
-    System.out.println("     -n   number of queries per thread. Default: 10,000,000");
+    System.out.println("     -m   data set size - number of records (in millions). Default: 10 (millions)");
     System.out.println("     -t   number of client threads. Default: 1");
+    System.out.println("     -r   data set replacement time (seconds). Default: 900");
+    System.out.println("     -e   test execution time (seconds). Default: 1800");
     System.out.println("     -s   memcached server address. Default: localhost");
     System.out.println("     -p   memcached port number. Default: 11211");
     System.out.println("     -z   zipfian alpha value. Default: 0.9");

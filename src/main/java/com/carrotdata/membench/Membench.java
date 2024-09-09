@@ -23,6 +23,7 @@ import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -46,21 +47,37 @@ import com.carrotdata.membench.benchmarks.TwitterSentimentsBenchmark;
 
 import net.rubyeye.xmemcached.XMemcachedClient;
 import net.rubyeye.xmemcached.exception.MemcachedException;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
 
 public class Membench {
-  
+  private static Logger logger = LogManager.getLogger(Membench.class);
+
   private static enum Mode {
     SET, SET_GET, GET
   }
   
-  private static Logger logger = LogManager.getLogger(Membench.class);
-
+  private static enum ClientType {
+    MEMCACHED, REDIS;
+  }
+  
+  private static interface Client {
+    
+    public Map<String, Object> get(Collection<String> keys) throws IOException;
+    
+    public long set(long start, int n, long loaded) throws IOException;
+    
+    public void close() throws IOException;
+  }
+  
   static Benchmark bench;
   static int numThreads = 1;
   static String host = "localhost";
   static int port = 11211;
   static long numRecords = 10_000_000;
   static Mode mode = Mode.SET;
+  static ClientType type = ClientType.MEMCACHED;
+  
   static int batchSize = 50;
   
   static String[] data;
@@ -72,6 +89,143 @@ public class Membench {
   static AtomicLong total = new AtomicLong();
   static AtomicLong compressed = new AtomicLong();
   static AtomicLong totalRead = new AtomicLong();
+  
+  private static class MemcachedClient implements Client {
+    XMemcachedClient client;
+    
+    MemcachedClient(String host , int port) throws IOException {
+      this.client = new XMemcachedClient(host, port);
+    }
+    
+    @Override
+    public Map<String, Object> get(Collection<String> keys) throws IOException {
+      try {
+        return client.get(keys);
+      } catch (Exception e) {
+        throw new IOException(e);
+      }
+    }
+
+    @Override
+    public long set(long start, int n, long loaded) throws IOException {
+      String key = "KEY:";
+
+      for (int i = 0; i < n - 1; i++) {
+        int index = (int) ((start + i) % data.length);
+        try {
+          byte[] value = data[index].getBytes();
+          total.addAndGet(value.length);
+          if (compressValue) {
+            value = GzipCompressor.compress(value);
+            compressed.addAndGet(value.length);
+          }
+          client.setWithNoReply(key + (start + i), 10000, value);
+          loaded++;
+          if (loaded % 100000 == 0) {
+            logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+          }
+        } catch (Exception e) {
+          logger.error("Error", e);
+          throw new IOException (e);
+        } 
+      }
+      int index = (int) ((start + n - 1) % data.length);
+
+      try {
+        byte[] value = data[index].getBytes();
+        total.addAndGet(value.length);
+        if (compressValue) {
+          value = GzipCompressor.compress(value);
+          compressed.addAndGet(value.length);
+        }
+        client.set(key + (start + n - 1), 10000, value);
+        loaded++;
+        if (loaded % 100000 == 0) {
+          logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+        }
+      } catch (Exception e) {
+        logger.error("Error", e);
+        throw new IOException (e);
+      } 
+      return loaded;
+    }
+
+    @Override
+    public void close() throws IOException {
+      client.shutdown();
+    }
+  }
+  
+  
+  private static class RedisClient implements Client {
+    
+    JedisPool pool ;
+    
+
+    RedisClient(String host, int port) {
+      pool = new JedisPool(host, port);
+    }
+    
+    @Override
+    public Map<String, Object> get(Collection<String> keys) throws IOException {
+      
+      try (Jedis jedis = pool.getResource()) {
+        byte[][] arr = new byte[keys.size()][];
+        
+        int i = 0;
+        for (String key: keys) {
+          arr[i] = key.getBytes();
+          i++;
+        }
+        
+        List<byte[]> list = jedis.mget(arr);
+        Map<String, Object> result = new HashMap<String, Object>();
+        for (i = 0; i < list.size(); i++) {
+          byte[] value = list.get(i);
+          if (compressValue) {
+            value = GzipCompressor.decompress(value);
+          }
+          String key = new String(arr[i]);
+          if (value != null) {
+            result.put(key,  value);
+          }
+        }
+        return result;
+      }
+    }
+
+    @Override
+    public long set(long start, int n, long loaded) throws IOException {
+      String key = "KEY:";
+
+      try (Jedis jedis = pool.getResource()) {
+        
+        for (int i = 0; i < n; i++) {
+          int index = (int) ((start + i) % data.length);
+          byte[] value = data[index].getBytes();
+          total.addAndGet(value.length);
+          if (compressValue) {
+            value = GzipCompressor.compress(value);
+            compressed.addAndGet(value.length);
+          }
+          long expire = 10000;
+          jedis.setex((key + (start + i)).getBytes(), expire, value);
+          loaded++;
+          if (loaded % 100000 == 0) {
+            logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+          }
+        }
+        return loaded;
+      }
+    }
+
+    @Override
+    public void close() throws IOException {
+      pool.close();
+    }
+  }
+
+ 
   
   public final static void main(String[] args) throws IOException {
     parseArgs(args);
@@ -107,10 +261,10 @@ public class Membench {
       long start = 0;
       long total = 0;
       long expected = 0;
-      XMemcachedClient client = null;
+      Client client = null;
       Random r = new Random();
       try {
-        client = new XMemcachedClient(host, port);
+        client = type == ClientType.MEMCACHED? new MemcachedClient(host, port): new RedisClient(host, port);
         
         while (true) {
           start = r.nextLong();
@@ -153,12 +307,10 @@ public class Membench {
             if (expected >= toRead) {
               break;
             }
-          } catch (TimeoutException | MemcachedException e) {
+          } catch (Exception e) {
             logger.error("Error", e);
             return;
-          } catch (InterruptedException e) {
-            logger.error("Error", e);
-          }
+          } 
         }
       } catch (IOException e) {
         logger.error("Error", e);
@@ -166,7 +318,7 @@ public class Membench {
       } finally {
         try {
           if (client != null) {
-            client.shutdown();
+            client.close();
           }
         } catch (IOException e) {
           // TODO Auto-generated catch block
@@ -228,14 +380,11 @@ public class Membench {
     Runnable loader = () -> {
 
       long start = 0;
-      String key = "KEY:";
 
-      XMemcachedClient client = null;
+      Client client = null;
       try {
-        client = new XMemcachedClient(host, port);
-
+        client = type == ClientType.MEMCACHED? new MemcachedClient(host, port): new RedisClient(host, port);
         long loaded = 0;
-        
         
         while (true) {
           start = currentId.getAndAdd(batchSize);
@@ -244,54 +393,14 @@ public class Membench {
           }
           int n = (int) Math.min(batchSize, numRecords - start);
 
-          for (int i = 0; i < n - 1; i++) {
-            int index = (int) ((start + i) % data.length);
-            try {
-              byte[] value = data[index].getBytes();
-              total.addAndGet(value.length);
-              if (compressValue) {
-                value = GzipCompressor.compress(value);
-                compressed.addAndGet(value.length);
-              }
-              client.setWithNoReply(key + (start + i), 10000, value);
-              loaded++;
-              if (loaded % 100000 == 0) {
-                logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
-              }
-            } catch (InterruptedException e) {
-              logger.error("Error", e);
-            } catch (MemcachedException e) {
-              logger.error("Error", e);
-              return;
-            }
-          }
-          int index = (int) ((start + n - 1) % data.length);
-
-          try {
-            byte[] value = data[index].getBytes();
-            total.addAndGet(value.length);
-            if (compressValue) {
-              value = GzipCompressor.compress(value);
-              compressed.addAndGet(value.length);
-            }
-            client.set(key + (start + n - 1), 10000, value);
-            loaded++;
-            if (loaded % 100000 == 0) {
-              logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
-            }
-          } catch (TimeoutException | MemcachedException e) {
-            logger.error("Error", e);
-            return;
-          } catch (InterruptedException e) {
-            logger.error("Error", e);
-          }
+          loaded = client.set(start, n, loaded);
         }
       } catch (IOException e) {
         logger.error("Error", e);
         return;
       } finally {
         try {
-          client.shutdown();
+          client.close();
         } catch (IOException e) {
           // TODO Auto-generated catch block
           e.printStackTrace();
@@ -323,6 +432,9 @@ public class Membench {
   }
 
   private static double memoryUsed() throws IOException {
+    
+    if (type == ClientType.REDIS) return 0;
+    
     XMemcachedClient client = null;
     try {
       client = new XMemcachedClient(host, port);
@@ -419,6 +531,14 @@ public class Membench {
         case "-a":
           setBatchSize(args[i]);
           break;
+        case "-l":
+          String client = args[i];
+          if (client.equals("redis")) {
+            type = ClientType.REDIS;
+          } else {
+            type = ClientType.MEMCACHED;
+          }
+          break;  
         default: usage();  
       }
     }
@@ -500,8 +620,11 @@ public class Membench {
   }
 
   private static void usage() {
-    System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip] -m [load | load_read | read");
+    System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip] -m [load | load_read | read] -a [size] -l [memcached | redis]");
+    
     System.out.println("     -a   batch size for set/get operations. Default: 50");
+    System.out.println("     -l   memcached or redis. Default: memcached");
+
     System.out.println("     -b   benchmark name. Available benchmarks: amazon_product_review, airbnb, arxiv, dblp, github, ohio, reddit, spotify, twitter, ");
     System.out.println("          twitter_sentiments. ");
     System.out.println("     -n   number of records to load to the cache. Default: 10000000");
