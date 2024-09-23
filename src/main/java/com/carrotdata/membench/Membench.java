@@ -119,7 +119,7 @@ public class Membench {
             value = GzipCompressor.compress(value);
             compressed.addAndGet(value.length);
           }
-          client.setWithNoReply(key + (start + i), 10000, value);
+          client.setWithNoReply(key + (start + i), 1000, value);
           loaded++;
           if (loaded % 100000 == 0) {
             logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
@@ -138,7 +138,7 @@ public class Membench {
           value = GzipCompressor.compress(value);
           compressed.addAndGet(value.length);
         }
-        client.set(key + (start + n - 1), 10000, value);
+        client.set(key + (start + n - 1), 1000, value);
         loaded++;
         if (loaded % 100000 == 0) {
           logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
