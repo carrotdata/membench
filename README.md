@@ -101,7 +101,7 @@ Table 1. RAM Usage and load throughput. Each result cell contains three numbers:
 
 | Server | airbnb | amazon_product_reviews | arxiv | dblp | github | ohio | reddit | spotify | twitter | twitter_sentiments |
 | :---: | :---: | :---: | :---: | :---: | :--: | :---: | :---: | :---: | :---: | :---: |
-| Memcarrot 0.11 | 20M, 8.38GB, 356K | 40M, 8.9GB, 535K | 20M, 10.8GB, 302K | 50M, 6.2GB, 680K | 40M, 3.0GB, 734K | 100M, 4.16GB, 805K | 10M, 3.33GB, 368K | 40M, 4GB, 655K | 10M, 5.4GB, 293K | 100M, 5.11GB, 755K |
+| Memcarrot 0.15 | 20M, 8.38GB, 356K | 40M, 8.9GB, 535K | 20M, 10.8GB, 302K | 50M, 6.2GB, 680K | 40M, 3.0GB, 734K | 100M, 4.16GB, 805K | 10M, 3.33GB, 368K | 40M, 4GB, 655K | 10M, 5.4GB, 293K | 100M, 5.11GB, 755K |
 | memcached 1.6.29 (zlib)| 20M, 19.4GB, - | 40M, 18.23GB, - | 20M, 20.44GB, - | 50M, 18.7GB, - | 40M, 14.2GB, - | 100M, 18.9GB, - | 10M, 13.0GB, - | 40M, 22.0GB, - | 10M, 11.7GB, - | 100M, 16.4GB, - |
 | memcached 1.6.29 (no comp)| 20M, 30.3GB, 518K | 40M, 25.5GB, 576K | 20M, 35.9GB, 521K | 50M, 25.2GB, 670K | 40M, 36.8GB, 582K | 100M, 18.9GB, 644K | 10M, 32.3.0GB, 419K | 40M, 39.8GB, 556K | 10M, 28.9GB, 426K | 100M, 16.4GB, 726K |
 
