@@ -84,7 +84,7 @@ We have compiled 10 different data sets, covering different types of a structure
 Membench supports client side compression (use ```-c gzip```). Do not enable it for ```Memcarrot``` server, because the server does it internally and much more efficiently. 
 You can enable client-side compression for vanilla ```memcached``` server. Tests have been performed with compression enabled for ```memcached``` (Gzip codec with default compression level was used) and disabled. Default write/read batch size - 50 (```-a 50```) was used in all tests.
 
-## Memcarrot 0.15 vs memcached 1.6.29
+## Memcarrot 0.15 vs memcached 1.6.29 vs Redis 7.2.5
 ### Configuration
 - Mac OS Sonoma 14.5
 - Mac Studio M1, 64GB RAM, 1 TB disk
@@ -92,8 +92,10 @@ You can enable client-side compression for vanilla ```memcached``` server. Tests
 - Number of test threads: 4
 - Number of records varied from 10M to 100M across all data sets
 - ```memcached``` command line: ```memcached -m 50000 -v```
+- `Redis` command line: `redis-server`
 - ```Memcarrot``` configuration: compression=ZSTD, level=3, compression page size=8192, storage max size=34359738368, index format=```com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat```  
-> For ```twitter_sentiments``` and ```ohio``` datasets client compression has been disabled because compression ratio was below 1.0
+> `memcached`: for ```twitter_sentiments``` and ```ohio``` datasets client compression has been disabled because compression ratio was below 1.0
+> `Redis`: for ```twitter_sentiments``` dataset client compression has been disabled (`ohio` was with compression enabled)
  
 ### Results
 
@@ -103,6 +105,7 @@ Table 1. RAM Usage and load throughput. Each result cell contains three numbers:
 | :---: | :---: | :---: | :---: | :---: | :--: | :---: | :---: | :---: | :---: | :---: |
 | Memcarrot 0.15 | 20M, 8.38GB, 356K | 40M, 8.9GB, 535K | 20M, 10.8GB, 302K | 50M, 6.2GB, 680K | 40M, 3.0GB, 734K | 100M, 4.16GB, 805K | 10M, 3.33GB, 368K | 40M, 4GB, 655K | 10M, 5.4GB, 293K | 100M, 5.11GB, 755K |
 | memcached 1.6.29 (zlib)| 20M, 19.4GB, - | 40M, 18.23GB, - | 20M, 20.44GB, - | 50M, 18.7GB, - | 40M, 14.2GB, - | 100M, 18.9GB, - | 10M, 13.0GB, - | 40M, 22.0GB, - | 10M, 11.7GB, - | 100M, 16.4GB, - |
+| Redis 7.2.5 (zlib)| 20M, 20.4GB, - | 40M, 19.3GB, - | 20M, 21.5GB, - | 50M, 20.0GB, - | 40M, 15.9GB, - | 100M, 23.8GB, - | 10M, 15.2GB, - | 40M, 23.4GB, - | 10M, 12.7GB, - | 100M, 20.3GB, - |
 | memcached 1.6.29 (no comp)| 20M, 30.3GB, 518K | 40M, 25.5GB, 576K | 20M, 35.9GB, 521K | 50M, 25.2GB, 670K | 40M, 36.8GB, 582K | 100M, 18.9GB, 644K | 10M, 32.3.0GB, 419K | 40M, 39.8GB, 556K | 10M, 28.9GB, 426K | 100M, 16.4GB, 726K |
 
 
