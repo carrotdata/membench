@@ -110,6 +110,7 @@ public class Membench {
     public long set(long start, int n, long loaded) throws IOException {
       String key = "KEY:";
 
+      int ttl = 10000;
       for (int i = 0; i < n - 1; i++) {
         int index = (int) ((start + i) % data.length);
         try {
@@ -119,7 +120,7 @@ public class Membench {
             value = GzipCompressor.compress(value);
             compressed.addAndGet(value.length);
           }
-          client.setWithNoReply(key + (start + i), 1000, value);
+          client.setWithNoReply(key + (start + i), ttl, value);
           loaded++;
           if (loaded % 100000 == 0) {
             logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
@@ -138,7 +139,7 @@ public class Membench {
           value = GzipCompressor.compress(value);
           compressed.addAndGet(value.length);
         }
-        client.set(key + (start + n - 1), 1000, value);
+        client.set(key + (start + n - 1), ttl, value);
         loaded++;
         if (loaded % 100000 == 0) {
           logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
