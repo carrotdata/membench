@@ -94,7 +94,7 @@ You can enable client-side compression for vanilla ```memcached``` server. Tests
 - ```memcached``` command line: ```memcached -m 50000 -v```
 - `Redis` command line: `redis-server`
 - ```Memcarrot``` configuration: compression=ZSTD, level=3, compression page size=8192, storage max size=34359738368, index format=```com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat```  
-> `memcached`: for ```twitter_sentiments``` and ```ohio``` datasets client compression has been disabled because compression ratio was below 1.0
+> `memcached`: for ```twitter_sentiments``` and ```ohio``` datasets client compression has been disabled because compression ratio was below 1.0.  
 > `Redis`: for ```twitter_sentiments``` dataset client compression has been disabled (`ohio` was with compression enabled)
  
 ### Results
