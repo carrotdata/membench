@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Determine the directory of the script
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 
@@ -17,8 +15,7 @@ CPATH="${APP_DIR}/conf:${APP_DIR}/target/${MEMBENCH_RELEASE}"
 export JVM_OPTS="-Xmx${MAX_HEAP_SIZE} -cp ${CPATH}"
 
 exec_cmd="${JAVA_HOME}/bin/java ${JVM_OPTS} com.carrotdata.membench.Membench"
+echo "exec_cmd: ${exec_cmd}"
 
 # Pass all command line arguments to the Java application
 ${exec_cmd} "$@"
-
-

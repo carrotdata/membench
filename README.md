@@ -81,6 +81,11 @@ We have compiled 10 different data sets, covering different types of a structure
   ```shell
   bin/membench.sh -b airbnb -n 20000000 -t 16 -m load_read
   ```
+  
+- Run [twitter_sentiments](data/twitter_sentiments)
+```shell
+bin/membench.sh -b twitter_sentiments -n 10000000 -t 4 -m load
+```
 Membench supports client side compression (use ```-c gzip```). Do not enable it for ```Memcarrot``` server, because the server does it internally and much more efficiently. 
 You can enable client-side compression for vanilla ```memcached``` server. Tests have been performed with compression enabled for ```memcached``` (Gzip codec with default compression level was used) and disabled. Default write/read batch size - 50 (```-a 50```) was used in all tests.
 
