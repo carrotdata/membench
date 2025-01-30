@@ -1,0 +1,13 @@
+services:
+  membench:
+    build: docker
+    image: carrotdata/membanch:latest-arm64
+    container_name: membench
+    volumes:
+      - ./data:/users/carrotdata/memcarrot/data
+    networks:
+      - monitoring
+
+networks:
+  monitoring:
+    driver: bridge
