@@ -128,7 +128,23 @@
                 <artifactId>commons-math3</artifactId>
                 <version>3.6.1</version>
         </dependency>
+        <dependency>
+        	<groupId>com.github.ben-manes.caffeine</groupId>
+  			<artifactId>caffeine</artifactId>
+  			<version>3.2.0</version>
+  		</dependency>
+  		<dependency>
+      		<groupId>org.ehcache</groupId>
+      		<artifactId>ehcache</artifactId>
+      		<version>3.9.11</version>
+    	</dependency>  
+    	<dependency>
+			<groupId>com.carrotdata</groupId>
+    		<artifactId>carrot-cache</artifactId>
+    		<version>0.16.1</version>
+		</dependency>	   
     </dependencies>
+    
     <!--/dependencyManagement-->
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
