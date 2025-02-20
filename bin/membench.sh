@@ -6,13 +6,13 @@ APP_DIR=$(dirname "$SCRIPT_DIR")
 
 echo "Membench home directory is ${APP_DIR}"
 
-MAX_HEAP_SIZE=6g
+MAX_HEAP_SIZE=26g
 MEMBENCH_RELEASE=membench-0.11-SNAPSHOT-jar-with-dependencies.jar
 cd "${APP_DIR}" || exit
 
 CPATH="${APP_DIR}/conf:${APP_DIR}/target/${MEMBENCH_RELEASE}"
 
-export JVM_OPTS="-Xmx${MAX_HEAP_SIZE} -cp ${CPATH}"
+export JVM_OPTS="-Xmx${MAX_HEAP_SIZE} -XX:MaxDirectMemorySize=50g -cp ${CPATH}"
 
 exec_cmd="${JAVA_HOME}/bin/java ${JVM_OPTS} com.carrotdata.membench.Membench"
 echo "exec_cmd: ${exec_cmd}"

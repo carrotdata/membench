@@ -359,7 +359,7 @@ public class Membench {
                      CacheConfigurationBuilder.newCacheConfigurationBuilder(
                              String.class, byte[].class,
                              ResourcePoolsBuilder.newResourcePoolsBuilder()
-                                     .offheap(19, MemoryUnit.GB) // Define off-heap memory size
+                                     .offheap(40, MemoryUnit.GB) // Define off-heap memory size
                      )
              )
              .build(true);
@@ -438,6 +438,8 @@ public class Membench {
   }
   
   private static void shutdown() throws IOException {
+    //logger.info("Press any button ...");
+    //System.in.read();
     // Shutdown if required
     if (isLocalClient()) {
       Client c = getClient();
