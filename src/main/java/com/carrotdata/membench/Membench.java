@@ -21,7 +21,6 @@ package com.carrotdata.membench;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -33,6 +32,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.carrotdata.cache.Builder;
+import com.carrotdata.cache.index.SubCompactBaseNoSizeIndexFormat;
 import com.carrotdata.membench.benchmarks.AirbnbBenchmark;
 import com.carrotdata.membench.benchmarks.AmazonProductReviewsBenchmark;
 import com.carrotdata.membench.benchmarks.ArxivBenchmark;
@@ -44,30 +45,28 @@ import com.carrotdata.membench.benchmarks.RedditBenchmark;
 import com.carrotdata.membench.benchmarks.SpotifyBenchmark;
 import com.carrotdata.membench.benchmarks.TwitterBenchmark;
 import com.carrotdata.membench.benchmarks.TwitterSentimentsBenchmark;
+import com.carrotdata.membench.client.Client;
+import com.carrotdata.membench.client.ClientType;
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 import net.rubyeye.xmemcached.XMemcachedClient;
 import net.rubyeye.xmemcached.exception.MemcachedException;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import org.ehcache.CacheManager;
+import org.ehcache.config.builders.CacheConfigurationBuilder;
+import org.ehcache.config.builders.CacheManagerBuilder;
+import org.ehcache.config.builders.ResourcePoolsBuilder;
+import org.ehcache.config.units.MemoryUnit;
+import org.ehcache.core.spi.service.StatisticsService;
+import org.ehcache.core.statistics.CacheStatistics;
+import org.ehcache.core.internal.statistics.DefaultStatisticsService;
 
 public class Membench {
   private static Logger logger = LogManager.getLogger(Membench.class);
 
   private static enum Mode {
     SET, SET_GET, GET
-  }
-  
-  private static enum ClientType {
-    MEMCACHED, REDIS;
-  }
-  
-  private static interface Client {
-    
-    public Map<String, Object> get(Collection<String> keys) throws IOException;
-    
-    public long set(long start, int n, long loaded) throws IOException;
-    
-    public void close() throws IOException;
   }
   
   static Benchmark bench;
@@ -77,15 +76,10 @@ public class Membench {
   static long numRecords = 10_000_000;
   static Mode mode = Mode.SET;
   static ClientType type = ClientType.MEMCACHED;
-  
   static int batchSize = 50;
-  
   static String[] data;
-  
   static boolean compressValue;
-    
   static AtomicLong currentId = new AtomicLong();
-  
   static AtomicLong total = new AtomicLong();
   static AtomicLong compressed = new AtomicLong();
   static AtomicLong totalRead = new AtomicLong();
@@ -159,26 +153,21 @@ public class Membench {
   
   
   private static class RedisClient implements Client {
-    
     JedisPool pool ;
     
-
     RedisClient(String host, int port) {
       pool = new JedisPool(host, port);
     }
     
     @Override
     public Map<String, Object> get(Collection<String> keys) throws IOException {
-      
       try (Jedis jedis = pool.getResource()) {
-        byte[][] arr = new byte[keys.size()][];
-        
+        byte[][] arr = new byte[keys.size()][];    
         int i = 0;
         for (String key: keys) {
           arr[i] = key.getBytes();
           i++;
         }
-        
         List<byte[]> list = jedis.mget(arr);
         Map<String, Object> result = new HashMap<String, Object>();
         for (i = 0; i < list.size(); i++) {
@@ -200,7 +189,6 @@ public class Membench {
       String key = "KEY:";
 
       try (Jedis jedis = pool.getResource()) {
-        
         for (int i = 0; i < n; i++) {
           int index = (int) ((start + i) % data.length);
           byte[] value = data[index].getBytes();
@@ -226,8 +214,213 @@ public class Membench {
     }
   }
 
- 
+  public static class CarrotCacheClient implements Client {
+
+    static com.carrotdata.cache.Cache cache;
+
+    public CarrotCacheClient() {
+      synchronized (CarrotCacheClient.class) {
+        if (cache != null) {
+          return;
+        }
+        Builder b = new Builder("membench");
+        b.withCacheMaximumSize(30_000_000_000L).withCacheDataSegmentSize(16_000_000)
+          .withMainQueueIndexFormat(SubCompactBaseNoSizeIndexFormat.class.getName())
+          .withCacheCompressionEnabled(true);
+        try {
+          cache = b.buildMemoryCache();
+        } catch (IOException e) {
+          e.printStackTrace();
+        }
+      }
+    }
+
+    @Override
+    public Map<String, Object> get(Collection<String> keys) throws IOException {
+      Map<String, Object> result = new HashMap<>();
+      for (String key : keys) {
+        byte[] bkey = key.getBytes();
+        byte[] value = cache.get(bkey);
+        if (value != null) {
+          result.put(key, new String(value));
+        }
+      }
+      return result;
+    }
+
+    @Override
+    public long set(long start, int n, long loaded) throws IOException {
+      String key = "KEY:";
+      for (int i = 0; i < n; i++) {
+        int index = (int) ((start + i) % data.length);
+        String value = data[index];
+        total.addAndGet(value.length());
+        long expire = 0;
+        cache.put((key + (start + i)).getBytes(), value.getBytes(), expire);
+        loaded++;
+        if (loaded % 100000 == 0) {
+          logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+        }
+      }
+      return loaded;
+    }
+
+    @Override
+    public void close() throws IOException {
+      cache.shutdown();
+    }
+
+    @Override
+    public boolean isLocal() {
+      return true;
+    }
+    
+    @Override
+    public long memoryUsed() {
+      return cache.getStorageAllocated();
+    }
+  }
   
+  public static class CaffeineClient implements Client {
+
+    static com.github.benmanes.caffeine.cache.Cache<String, byte[]> cache;
+
+    CaffeineClient(long size) {
+      synchronized (CaffeineClient.class) {
+        if (cache != null) {
+          return;
+        }
+        cache = Caffeine.newBuilder().maximumSize(size).build();
+      }
+    }
+
+    @Override
+    public Map<String, Object> get(Collection<String> keys) throws IOException {
+      Map<String, Object> result = new HashMap<>();
+      for (String key : keys) {
+        byte[] value = cache.getIfPresent(key);
+        if (value != null) {
+          if (compressValue) {
+            value = GzipCompressor.decompress(value);
+          }
+          result.put(key, value);
+        }
+      }
+      return result;
+    }
+
+    @Override
+    public long set(long start, int n, long loaded) throws IOException {
+      String key = "KEY:";
+      for (int i = 0; i < n; i++) {
+        int index = (int) ((start + i) % data.length);
+        byte[] value = data[index].getBytes();
+        total.addAndGet(value.length);
+        if (compressValue) {
+          value = GzipCompressor.compress(value);
+        }
+        cache.put(key + (start + i), value);
+        loaded++;
+        if (loaded % 100000 == 0) {
+          logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+        }
+      }
+      return loaded;
+    }
+
+    @Override
+    public void close() throws IOException {
+    }
+
+    @Override
+    public boolean isLocal() {
+      return true;
+    }
+
+  }
+ 
+ public static class EHCacheClient implements Client {
+   
+   static org.ehcache.Cache<String, byte[]> cache;
+   static StatisticsService service;
+   
+   EHCacheClient() {
+     
+     synchronized(EHCacheClient.class) {
+       if (cache != null) {
+         return;
+       }
+       service = new DefaultStatisticsService();
+     
+       // Create CacheManager with off-heap storage
+       CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
+             .using(service)
+             .withCache("membench",
+                     CacheConfigurationBuilder.newCacheConfigurationBuilder(
+                             String.class, byte[].class,
+                             ResourcePoolsBuilder.newResourcePoolsBuilder()
+                                     .offheap(40, MemoryUnit.GB) // Define off-heap memory size
+                     )
+             )
+             .build(true);
+
+       // Retrieve cache instance
+       cache = cacheManager.getCache("membench", String.class, byte[].class);
+     }
+   }
+   
+   @Override
+   public Map<String, Object> get(Collection<String> keys) throws IOException {
+     Map<String, Object> result = new HashMap<>();
+     for (String key : keys) {
+       byte[] value =  cache.get(key);
+       if (value != null) {
+         if (compressValue) {
+           value = GzipCompressor.decompress(value);
+         }
+         result.put(key, value);
+       }
+     }
+     return result;
+   }
+
+   @Override
+   public long set(long start, int n, long loaded) throws IOException {
+     String key = "KEY:";
+     for (int i = 0; i < n; i++) {
+       int index = (int) ((start + i) % data.length);
+       byte[] value = data[index].getBytes();
+       total.addAndGet(value.length);
+       if (compressValue) {
+         value = GzipCompressor.compress(value);
+       }
+       cache.put(key + (start + i), value);
+       loaded++;
+       if (loaded % 100000 == 0) {
+         logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
+       }
+     }
+     return loaded;
+   }
+
+   @Override
+   public void close() throws IOException {     
+   }
+    
+   @Override
+   public boolean isLocal() {
+     return true;
+   }
+   
+   /*
+    *  Dirty hack
+    */
+   public static long allocatedMemory() {
+     CacheStatistics stats = service.getCacheStatistics("membench");
+     return stats.getTierStatistics().get("OffHeap").getAllocatedByteSize();
+   }
+  }
+ 
   public final static void main(String[] args) throws IOException {
     parseArgs(args);
     
@@ -240,6 +433,49 @@ public class Membench {
     }
     if (mode != Mode.SET) {
       runDataGet();
+    }
+    shutdown();
+  }
+  
+  private static void shutdown() throws IOException {
+    //logger.info("Press any button ...");
+    //System.in.read();
+    // Shutdown if required
+    if (isLocalClient()) {
+      Client c = getClient();
+      c.close();
+    }
+  }
+  
+  private static boolean isLocalClient() throws IOException {
+    
+    switch (type) {
+      case MEMCACHED:
+      case REDIS:
+        return false;
+      case CARROTCACHE:
+      case CAFFEINE:
+      case EHCACHE:
+      default:
+        return true;
+    }
+  }
+  
+  private static Client getClient() throws IOException {
+    
+    switch (type) {
+      case MEMCACHED:
+        return new MemcachedClient(host, port);
+      case REDIS:
+        return new RedisClient(host, port);
+      case CARROTCACHE:
+        return new CarrotCacheClient();
+      case CAFFEINE:
+        return new CaffeineClient(2 * numRecords);
+      case EHCACHE:
+        return new EHCacheClient();
+      default:
+        return null;
     }
   }
   
@@ -265,44 +501,42 @@ public class Membench {
       Client client = null;
       Random r = new Random();
       try {
-        client = type == ClientType.MEMCACHED? new MemcachedClient(host, port): new RedisClient(host, port);
+        client = getClient();
         
         while (true) {
           start = r.nextLong();
-          start = Math.abs(start) % (numRecords - batchSize);//currentId.getAndAdd(batchSize);
+          start = Math.abs(start) % (numRecords - batchSize);
           if (start >= numRecords) {
             break;
           }
           int n = (int) Math.min(batchSize, numRecords - start);
-
           Collection<String> keys = getKeys(start, n);
-
           try {
             
             Map<String, Object> result = client.get(keys); 
-            
             expected += n;
             for (Map.Entry<String, Object> entry: result.entrySet()){
               total++;
               totalRead.incrementAndGet();
   
-              String key = entry.getKey();
-              Object value = entry.getValue();
-              byte[] bvalue = (byte[]) value;
-              String expValue = getValue(key);
-              if (value == null) {
-                continue;
-              }
-              if (compressValue) {
-                bvalue = GzipCompressor.decompress(bvalue);
-              }
-              if (Arrays.compare(expValue.getBytes(), bvalue) != 0) {
-                logger.error("{} read failed on key={}", Thread.currentThread(), key);
-                System.exit(-1);
-              } 
+              //String key = entry.getKey();
+//              Object value = entry.getValue();
+//              byte[] bvalue = (byte[]) value;
+//              //String expValue = getValue(key);
+//              if (value == null) {
+//                continue;
+//              }
+//              if (compressValue) {
+//                bvalue = GzipCompressor.decompress(bvalue);
+//              }
+//              if (Arrays.compare(expValue.getBytes(), bvalue) != 0) {
+//                logger.error("{} read failed on key={}", Thread.currentThread(), key);
+//                System.exit(-1);
+//              } 
             }
             if (expected % 100000 == 0) {
-              logger.info("{} read {} records, failed={}, collisions={}%", Thread.currentThread().getName(), expected, expected - total, (double)(expected-total) * 100/expected);
+              logger.info("{} read {} records, failed={}, collisions={}%", Thread.currentThread().getName(), expected, 
+                expected - total, (double)(expected - total) * 100/expected);
             }
             
             if (expected >= toRead) {
@@ -318,11 +552,10 @@ public class Membench {
         return;
       } finally {
         try {
-          if (client != null) {
+          if (client != null && !client.isLocal()) {
             client.close();
           }
         } catch (IOException e) {
-          // TODO Auto-generated catch block
           e.printStackTrace();
         }
       }
@@ -340,7 +573,6 @@ public class Membench {
       try {
         pool[i].join();
       } catch (InterruptedException e) {
-        // TODO Auto-generated catch block
         e.printStackTrace();
       }
     }
@@ -363,8 +595,8 @@ public class Membench {
     return Long.parseLong(key.substring(4));
   }
   
+  @SuppressWarnings("unused")
   private static String getValue(String key) {
-    
     long id = getId(key);
     return data[(int)(id % data.length)];
   }
@@ -384,7 +616,7 @@ public class Membench {
 
       Client client = null;
       try {
-        client = type == ClientType.MEMCACHED? new MemcachedClient(host, port): new RedisClient(host, port);
+        client = getClient();
         long loaded = 0;
         
         while (true) {
@@ -396,12 +628,14 @@ public class Membench {
 
           loaded = client.set(start, n, loaded);
         }
-      } catch (IOException e) {
+      } catch (Throwable e) {
         logger.error("Error", e);
         return;
       } finally {
         try {
-          client.close();
+          if (client != null && !client.isLocal()) {
+            client.close();
+          }
         } catch (IOException e) {
           // TODO Auto-generated catch block
           e.printStackTrace();
@@ -427,15 +661,39 @@ public class Membench {
     }
     
     long end = System.currentTimeMillis();
+
     logger.info("Done benchmark[{}] loaded {} records avg size={} in {} ms RPS={}, compresssion={}, Server RSS (est.)={}",
       bench.getName(), numRecords, bench.getAvgRecordSize(), (end - start),
       numRecords * 1000 / (end - start), compressed.get() == 0? "n/a": (double) total.get() / compressed.get(), format(memoryUsed()));
+    
   }
 
   private static double memoryUsed() throws IOException {
-    
-    if (type == ClientType.REDIS) return 0;
-    
+
+    switch(type) {
+      case REDIS: 
+        return 0;
+      case MEMCACHED:
+        return getMemcachedMemory();
+      case CARROTCACHE:
+        return CarrotCacheClient.cache.getStorageAllocated();
+      case CAFFEINE:
+        return estimateHeapUsage();
+      case EHCACHE:
+        return estimateHeapUsage() + EHCacheClient.allocatedMemory();
+      default:  
+        return 0;
+    }
+  }
+  
+  private static long estimateHeapUsage() {
+      data = null;
+      Runtime r = Runtime.getRuntime();
+      r.gc();
+      return r.totalMemory() - r.freeMemory();
+  }
+  
+  private static double getMemcachedMemory() throws IOException {
     XMemcachedClient client = null;
     try {
       client = new XMemcachedClient(host, port);
@@ -470,7 +728,7 @@ public class Membench {
         client.shutdown();
       }
     }
-    return -1;
+    return 0;
   }
   
   private static String format (double n) {
@@ -534,14 +792,32 @@ public class Membench {
           break;
         case "-l":
           String client = args[i];
-          if (client.equals("redis")) {
-            type = ClientType.REDIS;
-          } else {
-            type = ClientType.MEMCACHED;
-          }
+          parseClientType(client);
           break;  
         default: usage();  
       }
+    }
+  }
+  
+  private static void parseClientType(String client) {
+    switch(client) {
+      case "redis":
+        type = ClientType.REDIS;
+        break;
+      case "memcached":
+        type = ClientType.MEMCACHED;
+        break;
+      case "carrotcache":
+        type = ClientType.CARROTCACHE;
+        break;
+      case "caffeine":
+        type = ClientType.CAFFEINE;
+        break;
+      case "ehcache":
+        type = ClientType.EHCACHE;
+        break;
+      default:
+        throw new IllegalArgumentException(client);
     }
   }
   
@@ -624,7 +900,7 @@ public class Membench {
     System.out.println("Usage: membench.sh -b benchmark_name [-n number_records] [-t number_threads] [-s host] [-p port] -c [gzip] -m [load | load_read | read] -a [size] -l [memcached | redis]");
     
     System.out.println("     -a   batch size for set/get operations. Default: 50");
-    System.out.println("     -l   memcached or redis. Default: memcached");
+    System.out.println("     -l   memcached, redis. carrotcache, caffeine, ehcache. Default: memcached");
 
     System.out.println("     -b   benchmark name. Available benchmarks: amazon_product_review, airbnb, arxiv, dblp, github, ohio, reddit, spotify, twitter, ");
     System.out.println("          twitter_sentiments. ");

@@ -121,7 +121,6 @@ objects. Available datasets are:
   ```shell
   bin/membench.sh -b airbnb -n 20000000 -t 16 -m load_read
   ```
-
 -- Run
     ```shell
     bin/membench.sh -b twitter_sentiments -n 20000000 -t 16 -m load_read
