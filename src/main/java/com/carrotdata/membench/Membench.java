@@ -18,9 +18,11 @@
 
 package com.carrotdata.membench;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -49,11 +51,16 @@ import com.carrotdata.membench.client.Client;
 import com.carrotdata.membench.client.ClientType;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import net.rubyeye.xmemcached.GetsResponse;
 import net.rubyeye.xmemcached.XMemcachedClient;
+import net.rubyeye.xmemcached.XMemcachedClientBuilder;
+import net.rubyeye.xmemcached.command.BinaryCommandFactory;
 import net.rubyeye.xmemcached.exception.MemcachedException;
+import net.rubyeye.xmemcached.utils.AddrUtil;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import org.ehcache.CacheManager;
+import org.ehcache.PersistentCacheManager;
 import org.ehcache.config.builders.CacheConfigurationBuilder;
 import org.ehcache.config.builders.CacheManagerBuilder;
 import org.ehcache.config.builders.ResourcePoolsBuilder;
@@ -70,8 +77,9 @@ public class Membench {
   }
   
   static Benchmark bench;
+  static int prefixLength;
   static int numThreads = 1;
-  static String host = "localhost";
+  static String host = "127.0.0.1";
   static int port = 11211;
   static long numRecords = 10_000_000;
   static Mode mode = Mode.SET;
@@ -88,7 +96,17 @@ public class Membench {
     XMemcachedClient client;
     
     MemcachedClient(String host , int port) throws IOException {
+   // 1.  Build with your server list
+//      XMemcachedClientBuilder builder =
+//              new XMemcachedClientBuilder(AddrUtil.getAddresses("localhost:11211"));
+//      builder.setOpTimeout(2000000);
+//      // 2.  Enable the binary protocol
+//      builder.setCommandFactory(new BinaryCommandFactory());
+//
+//      // 3.  Create the client
+//      client = (XMemcachedClient) builder.build();
       this.client = new XMemcachedClient(host, port);
+      //this.client.
     }
     
     @Override
@@ -102,19 +120,20 @@ public class Membench {
 
     @Override
     public long set(long start, int n, long loaded) throws IOException {
-      String key = "KEY:";
+      String key = bench.getName() +":";
 
       int ttl = 10000;
       for (int i = 0; i < n - 1; i++) {
         int index = (int) ((start + i) % data.length);
         try {
           byte[] value = data[index].getBytes();
+          //logger.info("{}: size={}", index, data[index].length());
           total.addAndGet(value.length);
           if (compressValue) {
             value = GzipCompressor.compress(value);
             compressed.addAndGet(value.length);
           }
-          client.setWithNoReply(key + (start + i), ttl, value);
+          client.setWithNoReply(key + (start + i), ttl, value); 
           loaded++;
           if (loaded % 100000 == 0) {
             logger.info("{} loaded {} records", Thread.currentThread().getName(), loaded);
@@ -133,6 +152,8 @@ public class Membench {
           value = GzipCompressor.compress(value);
           compressed.addAndGet(value.length);
         }
+        //logger.info("{}: size={}", index, data[index].length());
+
         client.set(key + (start + n - 1), ttl, value);
         loaded++;
         if (loaded % 100000 == 0) {
@@ -186,7 +207,7 @@ public class Membench {
 
     @Override
     public long set(long start, int n, long loaded) throws IOException {
-      String key = "KEY:";
+      String key = bench.getName() + ":";
 
       try (Jedis jedis = pool.getResource()) {
         for (int i = 0; i < n; i++) {
@@ -250,7 +271,7 @@ public class Membench {
 
     @Override
     public long set(long start, int n, long loaded) throws IOException {
-      String key = "KEY:";
+      String key = bench.getName() + ":";
       for (int i = 0; i < n; i++) {
         int index = (int) ((start + i) % data.length);
         String value = data[index];
@@ -311,7 +332,7 @@ public class Membench {
 
     @Override
     public long set(long start, int n, long loaded) throws IOException {
-      String key = "KEY:";
+      String key = bench.getName() + ":";
       for (int i = 0; i < n; i++) {
         int index = (int) ((start + i) % data.length);
         byte[] value = data[index].getBytes();
@@ -351,15 +372,21 @@ public class Membench {
          return;
        }
        service = new DefaultStatisticsService();
+       
+       // Remove previous
+       File f = new File("./ehcache");
+       f.deleteOnExit();
      
        // Create CacheManager with off-heap storage
-       CacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
+       PersistentCacheManager cacheManager = CacheManagerBuilder.newCacheManagerBuilder()
              .using(service)
+             .with(CacheManagerBuilder.persistence(f))
              .withCache("membench",
                      CacheConfigurationBuilder.newCacheConfigurationBuilder(
                              String.class, byte[].class,
                              ResourcePoolsBuilder.newResourcePoolsBuilder()
-                                     .offheap(40, MemoryUnit.GB) // Define off-heap memory size
+                                     .offheap(40, MemoryUnit.GB)
+                                     .disk(50, MemoryUnit.GB, true)// Define off-heap memory size
                      )
              )
              .build(true);
@@ -386,7 +413,7 @@ public class Membench {
 
    @Override
    public long set(long start, int n, long loaded) throws IOException {
-     String key = "KEY:";
+     String key = bench.getName() + ":";
      for (int i = 0; i < n; i++) {
        int index = (int) ((start + i) % data.length);
        byte[] value = data[index].getBytes();
@@ -423,11 +450,14 @@ public class Membench {
  
   public final static void main(String[] args) throws IOException {
     parseArgs(args);
-    
+        
     if (bench == null) {
       usage();
     }
-    
+    try (var s = new java.net.Socket("127.0.0.1", 11212)) {
+      System.out.println("OK");
+    }
+    prefixLength = bench.getName().length() + 1;
     if (mode != Mode.GET) {
       runDataLoad();
     }
@@ -479,6 +509,7 @@ public class Membench {
     }
   }
   
+  
   private static void runDataGet() throws IOException {
 
     logger.info("Running benchmark (READ): ", bench.getName());
@@ -505,24 +536,30 @@ public class Membench {
         
         while (true) {
           start = r.nextLong();
-          start = Math.abs(start) % (numRecords - batchSize);
+          start = numRecords == 1? 0:Math.abs(start) % (numRecords - batchSize);
           if (start >= numRecords) {
             break;
           }
           int n = (int) Math.min(batchSize, numRecords - start);
           Collection<String> keys = getKeys(start, n);
+          String k = keys.iterator().next();
           try {
             
             Map<String, Object> result = client.get(keys); 
+            if (result == null || result.isEmpty()) {
+              logger.error("read failed on key={} size={} total={}", k, getValue(k).length(), total);
+              continue;
+            }
             expected += n;
-            for (Map.Entry<String, Object> entry: result.entrySet()){
-              total++;
-              totalRead.incrementAndGet();
-  
-              //String key = entry.getKey();
+            total += n;
+//            for (Map.Entry<String, Object> entry: result.entrySet()){
+//              total++;
+//              totalRead.incrementAndGet();
+//  
+//              String key = entry.getKey();
 //              Object value = entry.getValue();
 //              byte[] bvalue = (byte[]) value;
-//              //String expValue = getValue(key);
+//              String expValue = getValue(key);
 //              if (value == null) {
 //                continue;
 //              }
@@ -530,10 +567,11 @@ public class Membench {
 //                bvalue = GzipCompressor.decompress(bvalue);
 //              }
 //              if (Arrays.compare(expValue.getBytes(), bvalue) != 0) {
-//                logger.error("{} read failed on key={}", Thread.currentThread(), key);
+//                logger.error("{} read failed on key={} value={} size={} total={}", 
+//                  Thread.currentThread(), key, new String(bvalue), bvalue.length, total);
 //                System.exit(-1);
 //              } 
-            }
+//            }
             if (expected % 100000 == 0) {
               logger.info("{} read {} records, failed={}, collisions={}%", Thread.currentThread().getName(), expected, 
                 expected - total, (double)(expected - total) * 100/expected);
@@ -586,20 +624,171 @@ public class Membench {
   private static Collection<String> getKeys(long start, int n) {
     List<String> result = new ArrayList<String>();
     for (int i = 0; i < n; i++) {
-      result.add("KEY:" + (start + i));
+      result.add(bench.getName() + ":" + (start + i));
     }
     return result;
   }
   
   private static long getId(String key) {
-    return Long.parseLong(key.substring(4));
+    return Long.parseLong(key.substring(prefixLength));
   }
+  
   
   @SuppressWarnings("unused")
   private static String getValue(String key) {
     long id = getId(key);
     return data[(int)(id % data.length)];
   }
+  
+  private static void verifyBinProtoCommands() {
+    
+    XMemcachedClient xclient ;
+    try {
+      Client client = getClient();
+      if (client instanceof MemcachedClient) {
+        xclient = ((MemcachedClient) client).client;
+        if (xclient == null) {
+          logger.error("XMemcachedClient is null");
+          return;
+        }
+        logger.info("XMemcachedClient is ready");
+      } else {
+        logger.error("Not a MemcachedClient instance: {}", client.getClass().getName());
+        return;
+      }
+      String longValue = "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL";
+      String shortValue = "SSSSSSSSS";
+      verifyBinProtoCommands(xclient, longValue);
+      verifyBinProtoCommands(xclient, shortValue);
+    } catch (Exception e) {
+      logger.error("Error", e);
+      return;
+    }
+  }
+  
+  private static void verifyBinProtoCommands(XMemcachedClient client, String value) throws TimeoutException, InterruptedException, MemcachedException {
+    // SET/GETS
+    int exp = 10000;
+    String key = "key" ;
+    boolean result = client.set(key, exp, value);
+    GetsResponse<Object> v = client.gets(key);
+    String val = (String) v.getValue();
+    if(!value.equals(val)) {
+      logger.error("Value mismatch: expected={}, actual={}", value, val);
+      System.exit(-1);
+    } else {
+      logger.info("Value matches: {}", val);
+    }
+    long cas = v.getCas();
+    // CAS +
+    result = client.cas(key, exp, value + value, cas);
+    if (!result) {
+      logger.error("CAS failed for key={}", key);
+      System.exit(-1);
+    } else {
+      logger.info("CAS succeeded for key={}", key);
+    }
+    
+    // CAS -
+    result = client.cas(key, exp, value + value, cas);
+    if (result) {
+      logger.error("Wrong CAS succeeded for key={}", key);
+      System.exit(-1);
+    } else {
+      logger.info("Wrong CAS not succeeded for key={}", key);
+    }
+    // GAT
+    Object o =client.getAndTouch(key, exp + 1000);
+    val = (String) o;
+    if (!val.equals(value + value)) {
+      logger.error("Get and touch failed for key={} value={}", key, val);
+      System.exit(-1);
+    } else {
+      logger.info("Get and touch succeeded for key={} value={}", key, val);
+    }
+    // REPLACE
+    result = client.replace(key, exp, value);
+    if (!result) {
+      logger.error("Replace failed for key={}", key);
+      System.exit(-1);
+    } else {
+      logger.info("Replace succeeded for key={}", key);
+    }
+    
+    // GETS
+    v = client.gets(key);
+    val = (String)v.getValue();
+    if (!val.equals(value)) {
+      logger.error("Gets failed for key={} value={}", key, val);
+      System.exit(-1);
+    } else {
+      logger.info("Gets succeeded for key={} value={}", key, val);
+    }
+    cas = v.getCas();
+    // CAS again
+    result = client.cas(key, exp, value + value, cas);
+    if (!result) {
+      logger.error("CAS failed for key={}", key);
+      System.exit(-1);
+    } else {
+      logger.info("CAS succeeded for key={}", key);
+    }
+    // ADD
+    result = client.add(key, exp, value);
+    if (result) {
+      logger.error("Add succeeded (unexpected) for key={} but should fail", key);
+      System.exit(-1);
+    } else {
+      logger.info("Add not succeeded (expected) for key={}", key);
+    }
+    
+    // DELETE
+    result = client.delete(key);
+    if (!result) {
+      logger.error("Delete failed for key={}", key);
+      System.exit(-1);
+    } else {
+      logger.info("Delete succeeded for key={}", key);
+    }
+    
+    // SET empty  
+    result = client.set(key, exp, "");
+    // APPEND
+    client.append(key, value);
+    // PREPEND
+    client.prepend(key, value);
+    
+    o =client.get(key);
+    val = (String) o;
+    if (!val.equals(value + value)) {
+      logger.error("Get failed for key={} value={}", key, val + val);
+      System.exit(-1);
+    } else {
+      logger.info("Get succeeded for key={} value={}", key, val + val);
+    }
+    
+    client.set(key,  exp,  "0");
+    // INCR/DECR
+    long num = 1000;
+    
+    long res = client.incr(key, num);
+    
+    if (res != num) {
+      logger.error("Incr failed for key={} value={}", key, res);
+      System.exit(-1);
+    } else {
+      logger.info("Incr succeeded for key={} value={}", key, res);
+    }
+    res = client.decr(key, num);
+    if (res != 0) {
+      logger.error("Decr failed for key={} value={}", key, res);
+      System.exit(-1);
+    } else {
+      logger.info("Decr succeeded for key={} value={}", key, res);
+    }
+    
+  }
+  
   
   private static void runDataLoad() throws IOException {
     int toLoad = 1_000_000;
@@ -615,10 +804,10 @@ public class Membench {
       long start = 0;
 
       Client client = null;
+      //int batchSize = 1;
       try {
         client = getClient();
         long loaded = 0;
-        
         while (true) {
           start = currentId.getAndAdd(batchSize);
           if (start >= numRecords) {

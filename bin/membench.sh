@@ -12,7 +12,7 @@ cd "${APP_DIR}" || exit
 
 CPATH="${APP_DIR}/conf:${APP_DIR}/target/${MEMBENCH_RELEASE}"
 
-export JVM_OPTS="-Xmx${MAX_HEAP_SIZE} -XX:MaxDirectMemorySize=50g -cp ${CPATH}"
+export JVM_OPTS="-Xmx${MAX_HEAP_SIZE} -XX:MaxDirectMemorySize=50g -cp ${CPATH} -Dsun.net.inetaddr.ttl=60 -Dsun.net.inetaddr.negative.ttl=10"
 
 exec_cmd="${JAVA_HOME}/bin/java ${JVM_OPTS} com.carrotdata.membench.Membench"
 echo "exec_cmd: ${exec_cmd}"

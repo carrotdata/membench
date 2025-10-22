@@ -23,7 +23,7 @@ public class DblpBenchmark extends BenchmarkBase {
   
   public DblpBenchmark() {
     super(path);
-    this.name = "arxiv";
+    this.name = "dblp";
   }
   
   protected DblpBenchmark(String path) {

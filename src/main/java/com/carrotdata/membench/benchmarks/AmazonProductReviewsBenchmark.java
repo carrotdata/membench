@@ -23,7 +23,7 @@ public class AmazonProductReviewsBenchmark extends BenchmarkBase {
   
   public AmazonProductReviewsBenchmark() {
     super(path);
-    this.name = "amazon_producr_reviews";
+    this.name = "amazon_product_reviews";
   }
   
   protected AmazonProductReviewsBenchmark(String path) {
